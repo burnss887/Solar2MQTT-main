@@ -3,7 +3,6 @@
 Solar2MQTT Project
 https://github.com/softwarecrash/Solar2MQTT
 */
-
 #include "main.h"
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
@@ -19,6 +18,7 @@ https://github.com/softwarecrash/Solar2MQTT
 #ifdef TEMPSENS_PIN
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include <NonBlockingDallas.h>
 #endif
 
 PI_Serial mppClient(INVERTER_RX, INVERTER_TX);
@@ -29,10 +29,12 @@ AsyncWebSocket ws("/ws");
 AsyncWebSocketClient *wsClient;
 DNSServer dns;
 Settings settings;
+WebSerial webSerial;
 
 #ifdef TEMPSENS_PIN
 OneWire oneWire(TEMPSENS_PIN);
-DallasTemperature tempSens(&oneWire);
+DallasTemperature dallasTemp(&oneWire);
+NonBlockingDallas tempSens(&dallasTemp);
 DeviceAddress tempDeviceAddress;
 uint8_t numOfTempSens;
 #endif
@@ -60,7 +62,7 @@ String commandFromUser;
 String customResponse;
 
 bool firstPublish;
-JsonDocument Json; // main Json
+JsonDocument Json;                                           // main Json
 JsonObject deviceJson = Json["EspData"].to<JsonObject>();    // basic device data
 JsonObject staticData = Json["DeviceData"].to<JsonObject>(); // battery package data
 JsonObject liveData = Json["LiveData"].to<JsonObject>();     // battery package data
@@ -80,7 +82,8 @@ void notifyClients()
     AsyncWebSocketMessageBuffer *buffer = ws.makeBuffer(len);
     if (buffer)
     {
-      serializeJson(liveData, (char *)buffer->get(), len + 1);
+      assert(buffer);
+      serializeJson(liveData, buffer->get(), len);
       wsClient->text(buffer);
     }
     writeLog("WS data send");
@@ -104,6 +107,8 @@ void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType 
     wsClient = client;
     getJsonData();
     notifyClients();
+    break;
+    case WS_EVT_PING:
     break;
   case WS_EVT_DISCONNECT:
     wsClient = nullptr;
@@ -129,7 +134,7 @@ void recvMsg(uint8_t *data, size_t len)
     d += char(data[i]);
   }
   commandFromUser = (d);
-  WebSerial.println("Sending [" + d + "] to Device");
+  webSerial.println("Sending [" + d + "] to Device");
 }
 
 bool resetCounter(bool count)
@@ -171,7 +176,7 @@ bool resetCounter(bool count)
 void setup()
 {
   // make a compatibility mode for some crap routers?
-  //WiFi.setPhyMode(WIFI_PHY_MODE_11G);
+  // WiFi.setPhyMode(WIFI_PHY_MODE_11G);
   analogWrite(LED_PIN, 0);
 #ifdef isUART_HARDWARE
   analogWrite(LED_COM, 0);
@@ -190,38 +195,38 @@ void setup()
   // wm.setConnectTimeout(15);       // how long to try to connect for before continuing
   // wm.setConfigPortalTimeout(120); // auto close configportal after n seconds
   wm.setSaveConfigCallback(saveConfigCallback);
-/*
-  DEBUG_PRINTLN();
-  DEBUG_PRINTF("Device Name:\t");
-  DEBUG_PRINTLN(settings.data.deviceName);
-  DEBUG_PRINTF("Mqtt Server:\t");
-  DEBUG_PRINTLN(settings.data.mqttServer);
-  DEBUG_PRINTF("Mqtt Port:\t");
-  DEBUG_PRINTLN(settings.data.mqttPort);
-  DEBUG_PRINTF("Mqtt User:\t");
-  DEBUG_PRINTLN(settings.data.mqttUser);
-  DEBUG_PRINTF("Mqtt Passwort:\t");
-  DEBUG_PRINTLN(settings.data.mqttPassword);
-  DEBUG_PRINTF("Mqtt Interval:\t");
-  DEBUG_PRINTLN(settings.data.mqttRefresh);
-  DEBUG_PRINTF("Mqtt Topic:\t");
-  DEBUG_PRINTLN(settings.data.mqttTopic);
-  DEBUG_WEBLN();
-  DEBUG_WEBF("Device Name:\t");
-  DEBUG_WEBLN(settings.data.deviceName);
-  DEBUG_WEBF("Mqtt Server:\t");
-  DEBUG_WEBLN(settings.data.mqttServer);
-  DEBUG_WEBF("Mqtt Port:\t");
-  DEBUG_WEBLN(settings.data.mqttPort);
-  DEBUG_WEBF("Mqtt User:\t");
-  DEBUG_WEBLN(settings.data.mqttUser);
-  DEBUG_WEBF("Mqtt Passwort:\t");
-  DEBUG_WEBLN(settings.data.mqttPassword);
-  DEBUG_WEBF("Mqtt Interval:\t");
-  DEBUG_WEBLN(settings.data.mqttRefresh);
-  DEBUG_WEBF("Mqtt Topic:\t");
-  DEBUG_WEBLN(settings.data.mqttTopic);
-*/
+  /*
+    DEBUG_PRINTLN();
+    DEBUG_PRINTF("Device Name:\t");
+    DEBUG_PRINTLN(settings.data.deviceName);
+    DEBUG_PRINTF("Mqtt Server:\t");
+    DEBUG_PRINTLN(settings.data.mqttServer);
+    DEBUG_PRINTF("Mqtt Port:\t");
+    DEBUG_PRINTLN(settings.data.mqttPort);
+    DEBUG_PRINTF("Mqtt User:\t");
+    DEBUG_PRINTLN(settings.data.mqttUser);
+    DEBUG_PRINTF("Mqtt Passwort:\t");
+    DEBUG_PRINTLN(settings.data.mqttPassword);
+    DEBUG_PRINTF("Mqtt Interval:\t");
+    DEBUG_PRINTLN(settings.data.mqttRefresh);
+    DEBUG_PRINTF("Mqtt Topic:\t");
+    DEBUG_PRINTLN(settings.data.mqttTopic);
+    DEBUG_WEBLN();
+    DEBUG_WEBF("Device Name:\t");
+    DEBUG_WEBLN(settings.data.deviceName);
+    DEBUG_WEBF("Mqtt Server:\t");
+    DEBUG_WEBLN(settings.data.mqttServer);
+    DEBUG_WEBF("Mqtt Port:\t");
+    DEBUG_WEBLN(settings.data.mqttPort);
+    DEBUG_WEBF("Mqtt User:\t");
+    DEBUG_WEBLN(settings.data.mqttUser);
+    DEBUG_WEBF("Mqtt Passwort:\t");
+    DEBUG_WEBLN(settings.data.mqttPassword);
+    DEBUG_WEBF("Mqtt Interval:\t");
+    DEBUG_WEBLN(settings.data.mqttRefresh);
+    DEBUG_WEBF("Mqtt Topic:\t");
+    DEBUG_WEBLN(settings.data.mqttTopic);
+  */
   // create custom wifimanager fields
 
   AsyncWiFiManagerParameter custom_mqtt_server("mqtt_server", "MQTT server", NULL, 40);
@@ -339,14 +344,13 @@ void setup()
     server.on("/set", HTTP_GET, [](AsyncWebServerRequest *request)
               {
                 if(strlen(settings.data.httpUser) > 0 && !request->authenticate(settings.data.httpUser, settings.data.httpPass)) return request->requestAuthentication();
-                String message;
+                 
                 if (request->hasParam("CC")) {
-                  message = request->getParam("CC")->value();
-                  commandFromUser = (message);
+                    const AsyncWebParameter *p = request->getParam("CC");
+                    commandFromUser = p->value();
                 }
                 if (request->hasParam("ha")) {
-                  message = request->getParam("ha")->value();
-                  haDiscTrigger = true;
+                    haDiscTrigger = true;
                 }
                 request->send(200, "text/plain", "message received"); });
 
@@ -407,13 +411,13 @@ void setup()
                       { request->send(418, "text/plain", "418 I'm a teapot"); });
 
     // set the device name
-    
+
     MDNS.begin(settings.data.deviceName);
     MDNS.addService("http", "tcp", 80);
     ws.onEvent(onEvent);
     server.addHandler(&ws);
-    WebSerial.begin(&server);
-    WebSerial.onMessage(recvMsg);
+    webSerial.begin(&server);
+    webSerial.onMessage(recvMsg);
 
     server.begin();
 
@@ -424,23 +428,16 @@ void setup()
   }
 
   analogWrite(LED_PIN, 255);
-  #ifdef isUART_HARDWARE
-    analogWrite(LED_COM, 255);
-    analogWrite(LED_SRV, 255);
-    analogWrite(LED_NET, 255);
-  #endif
+#ifdef isUART_HARDWARE
+  analogWrite(LED_COM, 255);
+  analogWrite(LED_SRV, 255);
+  analogWrite(LED_NET, 255);
+#endif
   resetCounter(false);
 
 #ifdef TEMPSENS_PIN
-  tempSens.begin();
-  numOfTempSens = tempSens.getDeviceCount();
-  for (int i = 0; i < numOfTempSens; i++)
-  {
-    if (tempSens.getAddress(tempDeviceAddress, i))
-    {
-      tempSens.setResolution(tempDeviceAddress, 9);
-    }
-  }
+  tempSens.begin(NonBlockingDallas::resolution_12, TIME_INTERVAL);
+  tempSens.onTemperatureChange(handleTemperatureChange);
 #endif
 }
 
@@ -458,12 +455,43 @@ void loop()
     { // No use going to next step unless WIFI is up and running.
       if (commandFromUser != "")
       {
-        String tmp = mppClient.sendCommand(commandFromUser); // send a custom command to the device
+        if (commandFromUser == "autodetect")
+        {
+          writeLog("restart autodetect");
+          mppClient.Init();
+        }
+        else if (commandFromUser.startsWith("setp "))
+        {
+          // Extract the parameter substring after "setp "
+          String parameterString = commandFromUser.substring(5);
+          int parameter = parameterString.toInt();
+          if (parameterString != "0" && parameter == 0)
+          {
+            writeLog("Invalid parameter for 'setp' command.");
+          }
+          else if (parameter >= NoD && parameter < PROTOCOL_TYPE_MAX)
+          {
+            mppClient.protocol = static_cast<protocol_type_t>(parameter);
+            writeLog("Change protocol to: %s", protocolStrings[parameter]);
+          }
+          else
+          {
+            writeLog("Unknown protocol");
+          }
+        }
+        else
+        {
+          String tmp = mppClient.sendCommand(commandFromUser); // send a custom command to the device
+        }
         commandFromUser = "";
         mqtttimer = 0;
       }
+#ifdef TEMPSENS_PIN
+      tempSens.update();
+#endif
+
       ws.cleanupClients(); // clean unused client connections
-      mppClient.loop(); // Call the PI Serial Library loop
+      mppClient.loop();    // Call the PI Serial Library loop
       mqttclient.loop();
       if ((haDiscTrigger || settings.data.haDiscovery) && measureJson(Json) > jsonSize)
       {
@@ -478,7 +506,7 @@ void loop()
   if (restartNow && millis() >= (RestartTimer + 500))
   {
     ESP.restart();
-  } 
+  }
   notificationLED(); // notification LED routine
 }
 
@@ -497,10 +525,7 @@ bool prozessData()
   if (millis() - mqtttimer > (settings.data.mqttRefresh * 1000) || mqtttimer == 0)
   {
 #ifdef TEMPSENS_PIN
-    if (numOfTempSens > 0)
-    {
-      tempSens.requestTemperatures();
-    }
+    tempSens.requestTemperature();
 #endif
     sendtoMQTT(); // Update data to MQTT server if we should
     mqtttimer = millis();
@@ -518,21 +543,18 @@ void getJsonData()
   deviceJson[F("sw_version")] = SOFTWARE_VERSION;
   deviceJson[F("Free_Heap")] = ESP.getFreeHeap();
   deviceJson[F("HEAP_Fragmentation")] = ESP.getHeapFragmentation();
-  //deviceJson[F("json_memory_usage")] = Json.memoryUsage();
-  //deviceJson[F("json_capacity")] = Json.capacity();
+  // deviceJson[F("json_memory_usage")] = Json.memoryUsage();
+  // deviceJson[F("json_capacity")] = Json.capacity();
   deviceJson[F("runtime")] = millis() / 1000;
   deviceJson[F("ws_clients")] = ws.count();
   deviceJson[F("detect_protocol")] = mppClient.protocol;
+  deviceJson[F("detect_raw_qpi")] = mppClient.get.raw.qpi;
 #ifdef TEMPSENS_PIN
-  for (int i = 0; i < numOfTempSens; i++)
+  if (tempSens.indexExist(tempSens.getSensorsCount() - 1))
   {
-    if (tempSens.getAddress(tempDeviceAddress, i))
+    for (size_t i = 0; i < tempSens.getSensorsCount(); i++)
     {
-      float tempC = tempSens.getTempC(tempDeviceAddress);
-      if (tempC != DEVICE_DISCONNECTED_C)
-      {
-        deviceJson["DS18B20_" + String(i + 1)] = tempC;
-      }
+      deviceJson["DS18B20_" + String(i + 1)] = tempSens.getTemperatureC(i);
     }
   }
 #endif
@@ -556,7 +578,7 @@ bool connectMQTT()
   if (!mqttclient.connected())
   {
     firstPublish = false;
-    
+
     if (mqttclient.connect(mqttClientId, settings.data.mqttUser, settings.data.mqttPassword, (topicBuilder(buff, "Alive")), 0, true, "false", true))
     {
       if (mqttclient.connected())
@@ -603,25 +625,25 @@ bool sendtoMQTT()
     if (mppClient.get.raw.commandAnswer.length() > 0)
     {
       mqttclient.publish((String(settings.data.mqttTopic) + String("/DeviceControl/Set_Command_answer")).c_str(), (mppClient.get.raw.commandAnswer).c_str());
-      writeLog("raw command answer: ",mppClient.get.raw.commandAnswer);
+      writeLog("raw command answer: ", mppClient.get.raw.commandAnswer);
       mppClient.get.raw.commandAnswer = "";
     }
-#ifdef TEMPSENS_PIN
-    for (int i = 0; i < numOfTempSens; i++)
-    {
-      if (tempSens.getAddress(tempDeviceAddress, i))
-      {
-        float tempC = tempSens.getTempC(tempDeviceAddress);
-        if (tempC != DEVICE_DISCONNECTED_C)
+    /* #ifdef TEMPSENS_PIN
+        for (int i = 0; i < numOfTempSens; i++)
         {
-          char valBuffer[8];
-          sprintf(msgBuffer1, "%s/DS18B20_%i", settings.data.mqttTopic, (i + 1));
-          mqttclient.publish(msgBuffer1, dtostrf(tempC, 4, 1, valBuffer));
+          if (tempSens.getAddress(tempDeviceAddress, i))
+          {
+            float tempC = tempSens.getTempC(tempDeviceAddress);
+            if (tempC != DEVICE_DISCONNECTED_C)
+            {
+              char valBuffer[8];
+              sprintf(msgBuffer1, "%s/DS18B20_%i", settings.data.mqttTopic, (i + 1));
+              mqttclient.publish(msgBuffer1, dtostrf(tempC, 4, 1, valBuffer));
+            }
+          }
         }
-      }
-    }
-#endif
-// RAW
+    #endif */
+    // RAW
     mqttclient.publish(topicBuilder(buff, "RAW/Q1"), (mppClient.get.raw.q1).c_str());
     mqttclient.publish(topicBuilder(buff, "RAW/QPIGS"), (mppClient.get.raw.qpigs).c_str());
     mqttclient.publish(topicBuilder(buff, "RAW/QPIGS2"), (mppClient.get.raw.qpigs2).c_str());
@@ -754,9 +776,9 @@ bool sendHaDiscovery()
   }
 #ifdef TEMPSENS_PIN
   // Ext Temp sensors
-  for (int i = 0; i < numOfTempSens; i++)
+  if (tempSens.indexExist(tempSens.getSensorsCount() - 1))
   {
-    if (tempSens.getAddress(tempDeviceAddress, i))
+    for (size_t i = 0; i < tempSens.getSensorsCount(); i++)
     {
       String haDeviceDescription = String("\"dev\":") +
                                    "{\"ids\":[\"" + mqttClientId + "\"]," +
@@ -793,16 +815,26 @@ bool sendHaDiscovery()
   return true;
 }
 
-void writeLog(const char* format, ...)
+void handleTemperatureChange(int deviceIndex, int32_t temperatureRAW)
 {
-    char       msg[100];
-    va_list    args;
+  #ifdef TEMPSENS_PIN
+  writeLog("<DS18x> DS18B20_%d RAW:%d Celsius:%f Fahrenheit:%f", deviceIndex + 1, temperatureRAW, tempSens.rawToCelsius(temperatureRAW), tempSens.rawToFahrenheit(temperatureRAW));
+  char msgBuffer[32];
+  char buff[256]; // temp buffer for the topic string
+  mqttclient.publish(topicBuilder(buff, "DS18B20_", itoa((deviceIndex) + 1, msgBuffer, 10)), dtostrf(tempSens.rawToCelsius(temperatureRAW), 4, 2, msgBuffer));
+#endif
+}
 
-    va_start(args, format);
-    vsnprintf(msg, sizeof(msg), format, args); // do check return value
-    va_end(args);
+void writeLog(const char *format, ...)
+{
+  char msg[100];
+  va_list args;
 
-    // write msg to the log
-    DBG_PRINTLN(msg);
-    DBG_WEBLN(msg);
+  va_start(args, format);
+  vsnprintf(msg, sizeof(msg), format, args); // do check return value
+  va_end(args);
+
+  // write msg to the log
+  DBG_PRINTLN(msg);
+  DBG_WEB(msg);
 }

@@ -172,9 +172,9 @@ void PI_Serial::autoDetect() // function for autodetect the inverter type
         startChar = "(";
         serialIntfBaud = 2400;
         this->my_serialIntf->begin(serialIntfBaud, SWSERIAL_8N1);
-        String qpi = this->requestData("QPI");
-        writeLog("QPI:\t\t%s (Length: %d)", qpi, qpi.length());
-        if (qpi != "" && qpi.substring(0, 2) == "PI")
+        get.raw.qpi = this->requestData("QPI");
+        writeLog("QPI:\t\t%s (Length: %d)", get.raw.qpi, get.raw.qpi.length());
+        if (get.raw.qpi != "" && get.raw.qpi.substring(0, 2) == "PI")
         {
             writeLog("<Autodetect> Match protocol: PI3X");
             delimiter = " ";
@@ -183,9 +183,9 @@ void PI_Serial::autoDetect() // function for autodetect the inverter type
         }
         startChar = "^Dxxx";
         this->my_serialIntf->begin(serialIntfBaud, SWSERIAL_8N1);
-        String P005PI = this->requestData("^P005PI");
-        writeLog("^P005PI:\t\t%s (Length: %d)", P005PI, P005PI.length());
-        if (P005PI != "" && P005PI == "18")
+        get.raw.qpi = this->requestData("^P005PI");
+        writeLog("^P005PI:\t\t%s (Length: %d)", get.raw.qpi, get.raw.qpi.length());
+        if (get.raw.qpi != "" && get.raw.qpi == "18")
         {
             writeLog("<Autodetect> Match protocol: PI18");
             delimiter = ",";
@@ -199,9 +199,7 @@ void PI_Serial::autoDetect() // function for autodetect the inverter type
     {
         modbus = new MODBUS(this->my_serialIntf);
         modbus->Init();
-        if (modbus->autoDetect()){
-            protocol = MODBUS_MUST;
-        }
+        protocol = modbus->autoDetect();
     } 
     writeLog("----------------- End Autodetect -----------------");
 }
@@ -272,7 +270,7 @@ String PI_Serial::requestData(String command)
     }
     else if (commandBuffer == "") // catch empty answer, its similar to NAK
     {
-        commandBuffer = "NAK";
+        commandBuffer = "NOA";
     }
     else
     {
@@ -280,7 +278,7 @@ String PI_Serial::requestData(String command)
         connectionCounter++;
         commandBuffer = "ERCRC";
     }
-    writeLog("[C: %5S][CR: %4X][CC: %4X][L: %3u]", (const wchar_t *)command.c_str(), crcRecive, crcCalc, commandBuffer.length());
+    writeLog("[C: %6S][CR: %4X][CC: %4X][L: %3u]", (const wchar_t *)command.c_str(), crcRecive, crcCalc, commandBuffer.length());
     return commandBuffer;
 }
 
@@ -400,7 +398,7 @@ char *PI_Serial::getModeDesc(char mode) // get the char from QMOD and make reada
 
 bool PI_Serial::isModbus()
 {
-    return protocol == MODBUS_MUST;
+    return protocol == MODBUS_MUST || protocol == MODBUS_DEYE;
 }
 
 bool PI_Serial::checkQFLAG(const String& flags, char symbol) {
